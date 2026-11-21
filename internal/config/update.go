@@ -103,6 +103,9 @@ type updatePolicy struct {
 	RTMR2Allow  []string `toml:"rtmr2_allow,omitempty"`
 	RTMR3Allow  []string `toml:"rtmr3_allow,omitempty"`
 
+	ComposeManagerComposeAllow []string `toml:"compose_manager_compose_allow,omitempty"`
+	ComposeManagerImageAllow   []string `toml:"compose_manager_image_allow,omitempty"`
+
 	GatewayMRTDAllow   []string `toml:"gateway_mrtd_allow,omitempty"`
 	GatewayMRSEAMAllow []string `toml:"gateway_mrseam_allow,omitempty"`
 	GatewayRTMR0Allow  []string `toml:"gateway_rtmr0_allow,omitempty"`

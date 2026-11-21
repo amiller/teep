@@ -142,6 +142,19 @@ values the gateway may run (32 bytes of hex, not 48). When it is set,
 `gateway_compose_binding` fails unless the compose binds to MRConfigID and its
 hash is in the list. When it is absent, the compose is not pinned.
 
+`compose_manager_compose_allow` and `compose_manager_image_allow` pin what a
+NEAR model CVM's compose-manager deploys after boot (`compose_manager_actions`,
+see [NEAR attestation](providers/near/near_attestation.md#compose-manager-attestation)).
+The first lists the sha256 of compose files (32 bytes of hex); the second lists
+compose-manager images as `repo@sha256:<64 lowercase hex>`. Neither has a
+default, and the factor fails while either is empty.
+
+```toml
+[providers.nearcloud.policy]
+compose_manager_compose_allow = ["0faf0a037c662094be342a5c128fc531bc0145c869e27dc55bab7b1192d605e6"]
+compose_manager_image_allow = ["nearaidev/compose-manager@sha256:ae4332fdb0bfccf6410bc153a58d0b72a596a989cbb98fd5b6461fe32e079814"]
+```
+
 ### Merge order
 
 Each allowlist field is resolved independently using:

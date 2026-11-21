@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -292,3 +293,38 @@ func factorNames(r *attestation.VerificationReport) []string {
 	}
 	return names
 }
+
+// verifyComposeManager verifies the compose-manager attestation of raw
+// against the fixture's recorded Intel PCS collateral.
+func verifyComposeManager(t *testing.T, env *fixtureEnv, raw *attestation.RawAttestation, tdx *attestation.TDXVerifyResult) *attestation.ComposeManagerResult {
+	t.Helper()
+	verify := func(ctx context.Context, quote string) *attestation.TDXVerifyResult {
+		return attestation.VerifyTDXQuoteOnline(ctx, quote, attestation.NewCollateralGetter(env.client), fixtureVerificationTime(env))
+	}
+	r := attestation.VerifyComposeManager(t.Context(), raw, tdx, env.nonce, verify)
+	if r == nil || r.Err != nil {
+		t.Fatalf("compose-manager attestation: %+v", r)
+	}
+	return r
+}
+
+// pinComposeManager sets the compose-manager allowlists of p to the values
+// that the fixture's action log names, as an operator pins them.
+func pinComposeManager(t *testing.T, p *attestation.MeasurementPolicy, r *attestation.ComposeManagerResult) {
+	t.Helper()
+	files, images, err := attestation.ComposeManagerDeployments(r.Actions)
+	if err != nil {
+		t.Fatalf("compose-manager deployments: %v", err)
+	}
+	p.ComposeManagerComposeAllow = map[string]struct{}{}
+	for _, f := range files {
+		p.ComposeManagerComposeAllow[f] = struct{}{}
+	}
+	p.ComposeManagerImageAllow = map[string]struct{}{}
+	for _, img := range images {
+		p.ComposeManagerImageAllow[img] = struct{}{}
+	}
+}
+
+// composeManagerFactors are the factors of the compose-manager attestation.
+var composeManagerFactors = []string{attestation.FactorCMQuote, attestation.FactorCMTCB, attestation.FactorCMActions}

@@ -1600,6 +1600,47 @@ gateway_compose_hash_allow = ["` + strings.ToUpper(hash) + `"]
 	}
 }
 
+func TestLoadTOMLComposeManagerAllow(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	img := "nearaidev/compose-manager@sha256:" + strings.Repeat("cd", 32)
+	toml := `
+[providers.nearcloud]
+base_url = "https://cloud-api.near.ai"
+
+[providers.nearcloud.policy]
+compose_manager_compose_allow = ["` + strings.ToUpper(hash) + `"]
+compose_manager_image_allow = ["` + img + `"]
+`
+	path := writeConfigFile(t, toml, 0o600)
+	setenv(t, "TEEP_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	merged := MergedMeasurementPolicy("nearcloud", cfg, attestation.MeasurementPolicy{})
+	if _, ok := merged.ComposeManagerComposeAllow[hash]; !ok || len(merged.ComposeManagerComposeAllow) != 1 {
+		t.Fatalf("ComposeManagerComposeAllow = %v, want only %s", merged.ComposeManagerComposeAllow, hash)
+	}
+	if _, ok := merged.ComposeManagerImageAllow[img]; !ok || len(merged.ComposeManagerImageAllow) != 1 {
+		t.Fatalf("ComposeManagerImageAllow = %v, want only %s", merged.ComposeManagerImageAllow, img)
+	}
+}
+
+func TestLoadTOMLComposeManagerAllowInvalid(t *testing.T) {
+	for _, line := range []string{
+		`compose_manager_compose_allow = ["` + strings.Repeat("ab", 48) + `"]`,
+		`compose_manager_compose_allow = []`,
+		`compose_manager_image_allow = ["nearaidev/compose-manager:latest"]`,
+		`compose_manager_image_allow = ["nearaidev/compose-manager@sha256:` + strings.Repeat("AB", 32) + `"]`,
+	} {
+		path := writeConfigFile(t, "[policy]\n"+line+"\n", 0o600)
+		setenv(t, "TEEP_CONFIG", path)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "compose_manager_") {
+			t.Errorf("%s: want a compose_manager_ error, got %v", line, err)
+		}
+	}
+}
+
 func TestLoadTOMLGatewayComposeHashAllowWrongLength(t *testing.T) {
 	toml := `
 [policy]

@@ -133,6 +133,8 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 
 	// --- Build report with provider defaults ---
 	modelPolicy, gatewayPolicy := defaults.MeasurementDefaults("nearcloud")
+	composeManager := verifyComposeManager(t, &env, raw, tdxResult)
+	pinComposeManager(t, &modelPolicy, composeManager)
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "nearcloud",
 		Model:             env.manifest.Model,
@@ -143,6 +145,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 		NvidiaNRAS:        nrasResult,
 		PoC:               pocResult,
 		Compose:           composeResult,
+		ComposeManager:    composeManager,
 		ImageRepos:        modelCD.Repos,
 		GatewayImageRepos: gatewayCD.Repos,
 		DigestToRepo:      digestToRepo,
@@ -165,6 +168,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 	logReportFactors(t, report)
 
 	assertNearcloudReport(t, report)
+	assertMustPass(t, report, composeManagerFactors)
 }
 
 func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport) {

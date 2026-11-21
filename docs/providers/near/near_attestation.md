@@ -101,8 +101,9 @@ remains required.
 
 The gateway has its own signing-address scheme and TLS identity. Its evidence
 is validated separately, not compared with a repeated model report. Auxiliary
-OHTTP and compose-manager objects have their own typed schemas; their presence
-does not authorize inference or replace the model and gateway checks.
+OHTTP objects have their own typed schemas; their presence does not authorize
+inference or replace the model and gateway checks. The compose-manager object
+is verified by its own factors, described next.
 
 Exact-name and null-field handling use the shared
 [strict object decoder](../../../internal/jsonstrict/object.go). It re-encodes
@@ -122,6 +123,45 @@ Regression coverage includes the direct and cloud `parser_contract_test.go`
 files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
+
+## Compose-manager attestation
+
+The compose that the model CVM's MRConfigID binds runs compose-manager, its
+launcher, certbot and an OpenTelemetry collector. compose-manager then starts
+the inference proxy (which holds the model key and decrypts E2EE) and the
+model server from files of `nearai/cvm-compose-files`, after boot, so neither
+is in RTMR3 or MRConfigID. Their only record is the
+`compose_manager_attestation` member of each model entry: compose-manager's
+action log and a second TDX quote from the same TD, whose REPORTDATA is
+`sha256(canonical actions) ‖ client nonce` (`canonicalize_actions` and
+`attestation_binding` in nearai/compose-manager `src/main.rs`).
+
+- `compose_manager_quote` verifies that quote (Intel chain, signature, debug
+  off), requires MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG and RTMR0-3
+  to equal the instance quote, and recomputes REPORTDATA from the served
+  action list (JSON, keys sorted, no whitespace) and teep's nonce. RTMR3
+  carries the instance-id event, so the quote of another instance of the
+  same model fails.
+- `compose_manager_tcb` checks its Intel PCS collateral; TCB must be UpToDate.
+- `compose_manager_actions` reads the bound log. Every `file_sha256` of a
+  `compose_up` or `compose_stage` must be in `compose_manager_compose_allow`
+  and every `compose_manager_started` image in `compose_manager_image_allow`.
+  `compose_down`, `docker_restart`, `docker_clean` and `docker_evict` start
+  nothing; any other action fails, and so does an empty allowlist.
+
+All three are enforced and have no default allowlist: an operator pins the
+values that the failure detail lists. The check covers every deployment the
+log reports, not only the one running, because anything compose-manager
+started in the TD had its Docker socket access. Limits:
+
+- The log is compose-manager's own claim. It is as good as the allowed
+  compose-manager images, which have `docker.sock`, `dstack.sock` and
+  `pid: host`.
+- compose-manager prunes entries older than seven days unless they anchor a
+  deployed record, so a log does not show everything the TD ever ran.
+- teep does not fetch the allowed compose files or check the images they pin.
+- The launcher's `latest` channel can replace compose-manager with another
+  signed image; the log records it, and the image allowlist must accept it.
 
 ## Supply chain: image index and platform manifest
 

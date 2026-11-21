@@ -107,6 +107,9 @@ const (
 	FactorSigstoreVerify       = "sigstore_verification"
 	FactorSigstoreCode         = "sigstore_code_verified"
 	FactorEventLogIntegrity    = "event_log_integrity"
+	FactorCMQuote              = "compose_manager_quote"
+	FactorCMTCB                = "compose_manager_tcb"
+	FactorCMActions            = "compose_manager_actions"
 	FactorGWNonceMatch         = "gateway_nonce_match"
 	FactorGWQuotePresent       = "gateway_tee_quote_present"
 	FactorGWQuoteStructure     = "gateway_tee_quote_structure"
@@ -842,6 +845,7 @@ var KnownFactors = []string{
 	FactorMeasuredWeights, FactorBuildTransparency, FactorComponentRecognition,
 	FactorProviderSigner, FactorComponentSignature, FactorCPUIDRegistry,
 	FactorComposeBinding, FactorSigstoreVerify, FactorSigstoreCode, FactorEventLogIntegrity,
+	FactorCMQuote, FactorCMTCB, FactorCMActions,
 	// Gateway factors.
 	FactorGWNonceMatch, FactorGWQuotePresent, FactorGWQuoteStructure,
 	FactorGWCertChain, FactorGWQuoteSignature, FactorGWDebugDisabled,
@@ -876,6 +880,7 @@ var OnlineFactors = []string{
 	FactorSigstoreVerify,
 	FactorSigstoreCode,
 	FactorGWCPUIDRegistry,
+	FactorCMTCB,
 
 	// The gateway measurement is compared against Sigstore reference values,
 	// and the gateway certificate chain and signature need the AMD KDS, so all
@@ -1128,6 +1133,10 @@ type ReportInput struct {
 	Compose    *ComposeBindingResult
 	Sigstore   []SigstoreResult
 	Rekor      []RekorProvenance
+
+	// ComposeManager is the verification of the compose-manager quote and
+	// action log of a NEAR model entry. Nil for other formats.
+	ComposeManager *ComposeManagerResult
 
 	// Gateway fields — populated by providers that attest an API gateway in
 	// front of the model endpoint. The gateway is a separate principal: its
@@ -1429,6 +1438,9 @@ func buildEvaluators(includeGateway bool) []evaluatorFunc {
 		evalSigstoreVerification,
 		evalSigstoreCodeVerified,
 		evalEventLogIntegrity,
+		evalComposeManagerQuote,
+		evalComposeManagerTCB,
+		evalComposeManagerActions,
 	}
 	if includeGateway {
 		evals = append(evals,
@@ -4261,4 +4273,109 @@ func evalGatewaySEVReportDataBinding(in *ReportInput) []FactorResult {
 		return factor(TierGateway, FactorGWReportData, Pass, in.GatewaySEV.ReportDataBindingDetail)
 	}
 	return factor(TierGateway, FactorGWReportData, Fail, "no REPORTDATA verifier configured for the gateway")
+}
+
+// composeManagerPending returns the failure of the compose-manager evidence
+// before its own checks: not applicable to a format other than NEAR, Fail
+// when it was not verified, did not parse or its quote did not parse.
+func composeManagerPending(in *ReportInput, name string) []FactorResult {
+	switch r := in.ComposeManager; {
+	case in.Raw == nil || in.Raw.BackendFormat != FormatNear:
+		return factor(TierSupplyChain, name, NotApplicable, "compose-manager attestation is NEAR-specific")
+	case r == nil:
+		return factor(TierSupplyChain, name, Fail, "compose_manager_attestation was not verified")
+	case r.Err != nil:
+		return factor(TierSupplyChain, name, Fail, r.Err.Error())
+	case r.Quote.ParseErr != nil:
+		return factor(TierSupplyChain, name, Fail, fmt.Sprintf("compose-manager quote did not parse: %v", r.Quote.ParseErr))
+	}
+	return nil
+}
+
+// composeManagerQuoteErr returns why the compose-manager quote does not bind
+// its action log to the instance and the client nonce, or nil.
+func composeManagerQuoteErr(r *ComposeManagerResult) error {
+	q := r.Quote
+	switch {
+	case q.CertChainErr != nil:
+		return fmt.Errorf("compose-manager quote certificate chain: %w", q.CertChainErr)
+	case q.SignatureErr != nil:
+		return fmt.Errorf("compose-manager quote signature: %w", q.SignatureErr)
+	case q.DebugEnabled:
+		return errors.New("compose-manager quote has the TD debug bit set")
+	case r.TDErr != nil:
+		return fmt.Errorf("compose-manager quote is not from the instance TD: %w", r.TDErr)
+	case r.BindErr != nil:
+		return r.BindErr
+	}
+	return nil
+}
+
+// evalComposeManagerQuote checks the compose-manager quote of a NEAR model
+// entry: Intel certificate chain and signature, debug off, every TD
+// measurement equal to the instance quote, and REPORTDATA equal to
+// sha256(canonical action log) || client nonce.
+func evalComposeManagerQuote(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMQuote); f != nil {
+		return f
+	}
+	if err := composeManagerQuoteErr(in.ComposeManager); err != nil {
+		return factor(TierSupplyChain, FactorCMQuote, Fail, err.Error())
+	}
+	return factor(TierSupplyChain, FactorCMQuote, Pass, fmt.Sprintf(
+		"compose-manager quote: Intel chain and signature valid, debug off, same TD as the instance quote (MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG, RTMR0-3), REPORTDATA = sha256(%d actions) || client nonce",
+		len(in.ComposeManager.Actions)))
+}
+
+// evalComposeManagerTCB checks the Intel PCS collateral and TCB status of
+// the compose-manager quote.
+func evalComposeManagerTCB(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMTCB); f != nil {
+		return f
+	}
+	q := in.ComposeManager.Quote
+	switch {
+	case q.CollateralErr != nil:
+		return factor(TierSupplyChain, FactorCMTCB, Fail, fmt.Sprintf("Intel PCS collateral: %v", q.CollateralErr))
+	case q.TcbStatus == "":
+		return factor(TierSupplyChain, FactorCMTCB, Skip, "offline; Intel PCS collateral not fetched")
+	case q.TcbStatus != pcs.TcbComponentStatusUpToDate:
+		return factor(TierSupplyChain, FactorCMTCB, Fail, fmt.Sprintf("compose-manager quote TCB status: %s", q.TcbStatus))
+	}
+	return factor(TierSupplyChain, FactorCMTCB, Pass, "compose-manager quote TCB is UpToDate per Intel PCS")
+}
+
+// evalComposeManagerActions checks the action log that the compose-manager
+// quote binds: every compose file it stages or brings up must be in
+// compose_manager_compose_allow, and every compose-manager image it records
+// starting must be in compose_manager_image_allow. An empty allowlist fails.
+func evalComposeManagerActions(in *ReportInput) []FactorResult {
+	if f := composeManagerPending(in, FactorCMActions); f != nil {
+		return f
+	}
+	r := in.ComposeManager
+	if err := composeManagerQuoteErr(r); err != nil {
+		return factor(TierSupplyChain, FactorCMActions, Fail, "action log is not bound to a verified compose-manager quote: "+err.Error())
+	}
+	files, images, err := ComposeManagerDeployments(r.Actions)
+	if err != nil {
+		return factor(TierSupplyChain, FactorCMActions, Fail, err.Error())
+	}
+	var missing []string
+	for _, f := range files {
+		if !containsAllowlist(in.Policy.ComposeManagerComposeAllow, f) {
+			missing = append(missing, "compose_manager_compose_allow "+f)
+		}
+	}
+	for _, img := range images {
+		if !containsAllowlist(in.Policy.ComposeManagerImageAllow, img) {
+			missing = append(missing, "compose_manager_image_allow "+img)
+		}
+	}
+	if len(missing) > 0 {
+		return factor(TierSupplyChain, FactorCMActions, Fail, "not allowed: "+strings.Join(missing, "; "))
+	}
+	return factor(TierSupplyChain, FactorCMActions, Pass, fmt.Sprintf(
+		"%d actions bound by the compose-manager quote; %d compose files in compose_manager_compose_allow, %d images in compose_manager_image_allow; running %s",
+		len(r.Actions), len(files), len(images), images[len(images)-1]))
 }

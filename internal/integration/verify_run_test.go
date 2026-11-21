@@ -4,12 +4,29 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/verify"
 )
+
+// findResponse returns the body of the first captured response whose URL
+// path ends with suffix.
+func findResponse(t *testing.T, entries []capture.RecordedEntry, suffix string) []byte {
+	t.Helper()
+	for i := range entries {
+		if u, _, _ := strings.Cut(entries[i].URL, "?"); strings.HasSuffix(u, suffix) {
+			return entries[i].Body
+		}
+	}
+	t.Fatalf("no captured response for %s", suffix)
+	return nil
+}
 
 // buildVerifyRunConfig constructs a minimal config for verify.Run replay tests.
 // No API key — the E2EE test will return NoAPIKey and skip live network calls.
@@ -60,6 +77,15 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, env.manifest.NearConfig.Origin)
 	cp.E2EE = env.manifest.NearConfig.E2EE
+	// Pin the compose-manager allowlists to the fixture's action log.
+	raw, err := neardirect.ParseAttestationResponse(context.Background(), findResponse(t, env.entries, "/v1/attestation/report"), env.manifest.Model)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	offline := attestation.NewTDXVerifier(true, nil, time.Time{})
+	var policy attestation.MeasurementPolicy
+	pinComposeManager(t, &policy, attestation.VerifyComposeManager(context.Background(), raw, offline(context.Background(), raw.IntelQuote), env.nonce, offline))
+	cfg.ProviderPolicies = map[string]attestation.MeasurementPolicy{env.manifest.Provider: policy}
 	report, _, err := verify.Replay(context.Background(), findFixtureDir(t, "neardirect_near"), func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
 
 	if err != nil {
@@ -69,6 +95,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 	assertNoEnforcedFailures(t, report)
 
 	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present"})
+	assertMustPass(t, report, composeManagerFactors)
 
 	if report.Passed < 5 {
 		t.Errorf("expected at least 5 passing factors, got %d", report.Passed)
