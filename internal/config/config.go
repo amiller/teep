@@ -127,6 +127,13 @@ type PolicyConfig struct {
 	RTMR2Allow  []string `toml:"rtmr2_allow"`
 	RTMR3Allow  []string `toml:"rtmr3_allow"`
 
+	// ComposeManagerComposeAllow lists the sha256 of the compose files a
+	// NEAR compose-manager may stage or bring up, and
+	// ComposeManagerImageAllow the repo@sha256:digest of the compose-manager
+	// images it may run. Both are checked by compose_manager_actions.
+	ComposeManagerComposeAllow []string `toml:"compose_manager_compose_allow"`
+	ComposeManagerImageAllow   []string `toml:"compose_manager_image_allow"`
+
 	// Gateway-specific measurement allowlists (GW-M-04).
 	GatewayMRTDAllow   []string `toml:"gateway_mrtd_allow"`
 	GatewayMRSEAMAllow []string `toml:"gateway_mrseam_allow"`
@@ -443,6 +450,14 @@ func buildMeasurementPolicy(p *PolicyConfig) (attestation.MeasurementPolicy, err
 			return out, err
 		}
 	}
+	out.ComposeManagerComposeAllow, err = normalizeHexAllowlist(p.ComposeManagerComposeAllow, "policy.compose_manager_compose_allow", sha256.Size)
+	if err != nil {
+		return out, err
+	}
+	out.ComposeManagerImageAllow, err = normalizeImageAllowlist(p.ComposeManagerImageAllow, "policy.compose_manager_image_allow")
+	if err != nil {
+		return out, err
+	}
 
 	return out, nil
 }
@@ -534,7 +549,7 @@ func MergedAllowFail(providerName string, format attestation.BackendFormat, cfg 
 func hasMeasurementPolicy(p attestation.MeasurementPolicy) bool {
 	return p.HasMRTDPolicy() || p.HasMRSeamPolicy() ||
 		p.HasRTMRPolicy(0) || p.HasRTMRPolicy(1) ||
-		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3) || p.HasComposeHashPolicy()
+		p.HasRTMRPolicy(2) || p.HasRTMRPolicy(3) || p.HasComposeHashPolicy() || p.HasComposeManagerPolicy()
 }
 
 // MergedMeasurementPolicy returns a MeasurementPolicy that merges three layers:
@@ -583,6 +598,12 @@ func mergeAllowlists(base, overlay attestation.MeasurementPolicy) attestation.Me
 	if overlay.HasComposeHashPolicy() {
 		base.ComposeHashAllow = overlay.ComposeHashAllow
 	}
+	if len(overlay.ComposeManagerComposeAllow) > 0 {
+		base.ComposeManagerComposeAllow = overlay.ComposeManagerComposeAllow
+	}
+	if len(overlay.ComposeManagerImageAllow) > 0 {
+		base.ComposeManagerImageAllow = overlay.ComposeManagerImageAllow
+	}
 	return base
 }
 
@@ -612,6 +633,24 @@ func normalizeHexAllowlist(values []string, field string, size int) (map[string]
 			return nil, fmt.Errorf("%s entry %q decodes to %d bytes, want %d", field, v, len(b), size)
 		}
 		norm[s] = struct{}{}
+	}
+	return norm, nil
+}
+
+// normalizeImageAllowlist validates repo@sha256:digest image references.
+func normalizeImageAllowlist(values []string, field string) (map[string]struct{}, error) {
+	if values == nil {
+		return map[string]struct{}{}, nil
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s is set but empty; remove the key to disable policy, or add at least one image reference", field)
+	}
+	norm := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		if !attestation.ComposeManagerImageRef(v) {
+			return nil, fmt.Errorf("%s entry %q is not repo@sha256:<64 lowercase hex>", field, v)
+		}
+		norm[v] = struct{}{}
 	}
 	return norm, nil
 }

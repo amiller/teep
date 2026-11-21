@@ -151,6 +151,30 @@ gateway_compose_hash_allow = ["`+hash+`"]
 	}
 }
 
+func TestUpdateConfigPreservesComposeManagerAllow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "teep.toml")
+	hash := strings.Repeat("ab", 32)
+	img := "nearaidev/compose-manager@sha256:" + hash
+	os.WriteFile(path, []byte(`[providers.nearcloud.policy]
+compose_manager_compose_allow = ["`+hash+`"]
+compose_manager_image_allow = ["`+img+`"]
+`), 0o600)
+
+	obs := ObservedMeasurements{MRTD: strings.Repeat("cd", 48)}
+	if err := UpdateConfig(path, "nearcloud", &obs); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	var f updateFile
+	toml.Decode(string(data), &f)
+	p := f.Providers["nearcloud"].Policy
+	if len(p.ComposeManagerComposeAllow) != 1 || p.ComposeManagerComposeAllow[0] != hash ||
+		len(p.ComposeManagerImageAllow) != 1 || p.ComposeManagerImageAllow[0] != img {
+		t.Errorf("compose-manager allowlists lost: %+v", p)
+	}
+}
+
 func TestUpdateConfigMultipleProviders(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "teep.toml")

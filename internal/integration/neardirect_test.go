@@ -117,6 +117,8 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 
 	// Build report with provider defaults.
 	modelPolicy, _ := defaults.MeasurementDefaults("neardirect")
+	composeManager := verifyComposeManager(t, &env, raw, tdxResult)
+	pinComposeManager(t, &modelPolicy, composeManager)
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "neardirect",
 		Model:             env.manifest.Model,
@@ -127,6 +129,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		NvidiaNRAS:        nrasResult,
 		PoC:               pocResult,
 		Compose:           composeResult,
+		ComposeManager:    composeManager,
 		ImageRepos:        modelCD.Repos,
 		DigestToRepo:      digestToRepo,
 		Sigstore:          sigstoreResults,
@@ -141,6 +144,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 	logReportFactors(t, report)
 
 	assertNeardirectReport(t, report)
+	assertMustPass(t, report, composeManagerFactors)
 }
 
 func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport) {

@@ -9,6 +9,18 @@ type MeasurementPolicy struct {
 	// ComposeHashAllow lists sha256(app_compose) values; only the gateway
 	// policy sets it.
 	ComposeHashAllow map[string]struct{}
+	// ComposeManagerComposeAllow lists the sha256 of the compose files that
+	// a NEAR compose-manager may stage or bring up (compose_manager_actions).
+	ComposeManagerComposeAllow map[string]struct{}
+	// ComposeManagerImageAllow lists the repo@sha256:digest references of
+	// the compose-manager images the action log may record starting.
+	ComposeManagerImageAllow map[string]struct{}
+}
+
+// HasComposeManagerPolicy reports whether a compose-manager allowlist is
+// configured.
+func (p MeasurementPolicy) HasComposeManagerPolicy() bool {
+	return len(p.ComposeManagerComposeAllow) > 0 || len(p.ComposeManagerImageAllow) > 0
 }
 
 // HasComposeHashPolicy reports whether a compose hash allowlist is configured.
