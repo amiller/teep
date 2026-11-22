@@ -272,6 +272,9 @@ func TestAuditSessionsCovered(t *testing.T) {
 	if !slices.Contains(mixed.Covered, attestation.FactorTEECertChain) {
 		t.Errorf("tee_cert_chain not covered: %v", mixed.Covered)
 	}
+	if len(only.ImageRepos) == 0 || mixed.ImageRepos != nil {
+		t.Errorf("images: Phala model CVM %v, with a Chutes session %v; want the compose images, then none", only.ImageRepos, mixed.ImageRepos)
+	}
 
 	online := SessionAuditor{}
 	for _, f := range online.Covers(chutesSession) {

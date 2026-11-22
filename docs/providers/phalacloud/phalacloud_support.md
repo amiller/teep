@@ -116,7 +116,9 @@ one is not pinned:
 1. The TDX quote: structure, Intel certificate chain, signature, debug off,
    and online a TCB that is UpToDate.
 2. MRTD and MRSEAM: the Phala model CVM against the dstack base list, a
-   Chutes instance against the Chutes list.
+   Chutes instance against the Chutes list. RTMR0, RTMR1 and RTMR2 of every
+   session against the provider's `rtmr0_allow`..`rtmr2_allow`, for each
+   one the table sets.
 3. REPORTDATA with the session's own nonce: for the Phala model CVM
    sha256(signing_address ‖ tls_cert_fingerprint) and the gateway's request
    nonce, with an ecdsa address that binds the signing key; for Chutes
@@ -150,8 +152,9 @@ key for it.
 
 `aci_session_verified` (enforced) passes when at least one session passes.
 Its detail states what a pinned session proves: genuine TDX and GPU
-evidence with an allowed MRTD and MRSEAM. The workload policy of the
-upstream (RTMR values, compose content, images) is not checked.
+evidence with an allowed MRTD and MRSEAM, and whether an RTMR policy was set
+and matched. `component_recognition` checks the images; the compose content
+is not checked.
 The report and the authorization carry the ids of the passed sessions, and
 every Phala Cloud request carries them in `provider.aci_session_ids`; a
 request without a verified session is not sent, and a client's own `aci_`
@@ -408,8 +411,23 @@ Cloud requests use the user's API key, so teep can fetch their receipts
 
 `phalacloud.SupplyChainPolicy` lists the gateway images
 (`aci.GatewayImages`), compose-pinned: the gateway quote's MRConfigID measures
-the compose manifest that pins each image by digest. It lists no model-tier
-image, so a dstack-format response fails `component_recognition`.
+the compose manifest that pins each image by digest. It also lists the images
+of the Phala model CVM at the model tier (`modelCVMImages`), compose-pinned in
+the same way: the compose `67ca392a…` of
+`deepseek/deepseek-v4.1-flash-1017` on dstack 0.6.3 runs SGLang
+(`ghcr.io/kingsleydon/sglang`), `phala-inference-guard`, `dstack-ingress`,
+`haproxy`, `grafana/alloy` and `cvm-log-collector`, each pinned by digest;
+the compose `c5628c75…` of `qwen/qwen3.8-27b` runs the same images with
+SGLang from `ghcr.io/phala-network/sglang`. The list names repositories: any
+digest under them passes, and a model CVM with another image fails
+`component_recognition`.
+
+In ACI mode `component_recognition` reads the images of the pinned sessions'
+composes. The audit takes them from a Phala model CVM's `app_compose` once
+its compose binding passed, and lists them only when every pinned session
+has one, so the factor fails while a Chutes session is pinned. The factor is
+allowed to fail by default; a table enforces it by removing it from
+`allow_fail`.
 
 ## Factor enforcement
 
@@ -424,10 +442,11 @@ These are the quote structure, certificate chain, signature and debug bit,
 evidence nonce), the NVIDIA payload, signature and claims, online
 `intel_pcs_collateral`, `tee_tcb_current` and `tee_tcb_not_revoked`, and,
 when every pinned session is a Phala model CVM, `event_log_integrity` and
-`compose_binding`. Every other factor keeps its own result. The audit
-checks no RTMR value (`tee_hardware_config`, `tee_boot_config`), no client
-nonce in the GPU evidence (`nvidia_nonce_client_bound`), no NRAS, and no
-CPU-GPU binding, weights or components, so those fail.
+`compose_binding`. `tee_hardware_config` is covered when the table sets
+`rtmr0_allow`, and `tee_boot_config` when it sets `rtmr1_allow` or
+`rtmr2_allow`. Every other factor keeps its own result. The audit checks no
+client nonce in the GPU evidence (`nvidia_nonce_client_bound`), no NRAS,
+and no CPU-GPU binding or weights, so those fail.
 
 The ACI/1 report selects `PhalaCloudACIDefaultAllowFail`: the list shared with
 Venice and NanoGPT (`ACIDefaultAllowFail`) without `tls_key_binding`, which
@@ -466,10 +485,13 @@ stream failed.
   the gateway's verification at `established_at`, with the gateway's own
   nonce. teep pins sessions that a verification passed until the
   authorization ends.
-- teep has no policy for the RTMR values, the compose content and the images
-  of the Phala model CVM, and checks only MRTD, MRSEAM, RTMR1 and RTMR2 of a
-  Chutes instance. It sends no Sigstore, Proof of Cloud or NRAS request for a
-  session.
+- teep has no built-in RTMR values for the Phala model CVM; a table sets
+  them. The table's RTMR allowlists apply to every session, so a table that
+  sets them refuses a Chutes session whose values it does not list. For a
+  Chutes session teep checks MRTD and MRSEAM against the Chutes list, and
+  RTMR0-2 only against the table. It has no policy for the compose content,
+  and sends no Sigstore, Proof of Cloud or NRAS request for a session, so
+  the digests of the model CVM's images are not looked up in Rekor.
 - The bounded set narrows routing to the pinned upstreams (see the point of
   discussion).
 - E2EE v2 defines field paths only for message content. teep refuses a
@@ -517,6 +539,14 @@ stream failed.
   checks the gateway verifier and image policy of `teep serve`.
 - `TestParseAttestationResponseACI` and `TestSupplyChainPolicyGatewayImages`
   in [Phala Cloud ACI/1 tests](../../../internal/provider/phalacloud/aci_test.go).
+- `TestSessionAuditRTMRPolicy` in
+  [session audit tests](../../../internal/provider/phalacloud/session_audit_test.go),
+  `TestSupplyChainPolicyModelCVM` in
+  [policy tests](../../../internal/provider/phalacloud/policy_test.go) and
+  `TestACISessionComponentRecognition` in
+  [ACI session coverage tests](../../../internal/attestation/aci_session_coverage_test.go)
+  check the RTMR policy, the model CVM images and `component_recognition` in
+  ACI mode.
 - `TestVerifyRun_PhalaCloudCanonical_Fixture` and
   `TestPhalaCloudCanonical_PinsDecideCustody` in
   [canonical report replay tests](../../../internal/integration/phalacloud_canonical_test.go)

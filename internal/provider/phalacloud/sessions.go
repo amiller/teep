@@ -206,7 +206,10 @@ func (s *sessionSet) refuseAll(bundle []*aci.Session, reason string) {
 
 // AuditSessions audits the sessions that the attester fetched with raw and
 // returns the result for the aci_session_verified factor. A session is
-// pinned only when every check of auditor passes.
+// pinned only when every check of auditor passes. The result lists the
+// images of the pinned sessions only when each of them has an attested
+// compose, so that component_recognition never passes for a pinned session
+// whose images are unknown.
 func AuditSessions(ctx context.Context, auditor SessionAuditor, raw *attestation.RawAttestation) *attestation.ACISessionResult {
 	set, ok := raw.ACISessions.(*sessionSet)
 	if !ok || set == nil {
@@ -216,11 +219,12 @@ func AuditSessions(ctx context.Context, auditor SessionAuditor, raw *attestation
 		return &attestation.ACISessionResult{Err: set.err}
 	}
 	result := &attestation.ACISessionResult{Refused: slices.Clone(set.refused)}
+	var pinnedRepos [][]string
 	for _, path := range set.listUnknown {
 		result.UnknownFields = append(result.UnknownFields, "aci_sessions."+path)
 	}
 	for _, s := range set.sessions {
-		err := auditor.Audit(ctx, s)
+		repos, err := auditor.Audit(ctx, s)
 		for _, path := range s.Unknown {
 			result.UnknownFields = append(result.UnknownFields, fmt.Sprintf("aci_sessions[%s].%s", s.ID[:min(len(s.ID), 12)], path))
 		}
@@ -234,6 +238,14 @@ func AuditSessions(ctx context.Context, auditor SessionAuditor, raw *attestation
 		}
 		result.Covered = covers
 		result.Pinned = append(result.Pinned, attestation.ACIPinnedSession{ID: s.ID, EstablishedAt: s.EstablishedAt, ExpiresAt: s.ExpiresAt})
+		pinnedRepos = append(pinnedRepos, repos)
+	}
+	if !slices.ContainsFunc(pinnedRepos, func(r []string) bool { return len(r) == 0 }) {
+		for _, repo := range slices.Concat(pinnedRepos...) {
+			if !slices.Contains(result.ImageRepos, repo) {
+				result.ImageRepos = append(result.ImageRepos, repo)
+			}
+		}
 	}
 	return result
 }

@@ -25,7 +25,8 @@ func TestParseAttestationResponseACI(t *testing.T) {
 	}
 }
 
-// The Phala Cloud policy lists the gateway images and validates.
+// The Phala Cloud policy lists the gateway images and validates. The
+// gateway images that the model CVM does not run are gateway tier only.
 func TestSupplyChainPolicyGatewayImages(t *testing.T) {
 	p := phalacloud.SupplyChainPolicy()
 	if err := p.Validate(); err != nil {
@@ -34,7 +35,7 @@ func TestSupplyChainPolicyGatewayImages(t *testing.T) {
 	if p.IsNoSupplyChainSurface() || !p.HasGatewayImages() {
 		t.Fatal("Phala Cloud policy has no gateway images")
 	}
-	for _, repo := range []string{"ghcr.io/dstack-tee/dstack-ingress", "ghcr.io/edgelesssys/privatemode/privatemode-proxy"} {
+	for _, repo := range []string{"ghcr.io/edgelesssys/privatemode/privatemode-proxy", "prom/node-exporter"} {
 		if !p.AllowedInGateway(repo) || p.AllowedInModel(repo) {
 			t.Errorf("%s: gateway=%v model=%v, want gateway tier only", repo, p.AllowedInGateway(repo), p.AllowedInModel(repo))
 		}
