@@ -1460,6 +1460,7 @@ func RelayStream(ctx context.Context, w http.ResponseWriter, body io.Reader, ses
 	}
 
 	if err := scanner.Err(); err != nil {
+		WriteSSEUpstreamError(w, flusher, err)
 		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 	if err := CheckSSEEndMarker(session, endpoint, false); err != nil {

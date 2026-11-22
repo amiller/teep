@@ -3,6 +3,7 @@ package e2ee
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -125,7 +126,19 @@ func NewSSEScanner(body io.Reader) (scanner *bufio.Scanner, cleanup func()) {
 // WriteSSEError writes an SSE error event and flushes. Used when streaming
 // has already started and we can't use http.Error.
 func WriteSSEError(w http.ResponseWriter, flusher http.Flusher, msg string) {
-	fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"message\":%q,\"type\":\"decryption_error\"}}\n\n", msg)
+	writeSSEError(w, flusher, msg, "decryption_error")
+}
+
+// WriteSSEUpstreamError reports, after streaming started, that the upstream
+// stream failed before its end marker, so the client does not take the
+// truncated stream for a complete one.
+func WriteSSEUpstreamError(w http.ResponseWriter, flusher http.Flusher, err error) {
+	writeSSEError(w, flusher, "upstream stream ended early: "+err.Error(), "upstream_error")
+}
+
+func writeSSEError(w http.ResponseWriter, flusher http.Flusher, msg, typ string) {
+	data, _ := json.Marshal(map[string]map[string]string{"error": {"message": msg, "type": typ}})
+	fmt.Fprintf(w, "event: error\ndata: %s\n\n", data)
 	flusher.Flush()
 }
 

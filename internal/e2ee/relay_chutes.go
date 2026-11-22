@@ -149,6 +149,9 @@ func RelayStreamChutes(ctx context.Context, w http.ResponseWriter, body io.Reade
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if headerWritten {
+			WriteSSEUpstreamError(w, flusher, err)
+		}
 		return stats, fmt.Errorf("%w: %w", ErrRelayFailed, err)
 	}
 	return stats, nil
