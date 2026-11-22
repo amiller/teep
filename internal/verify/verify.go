@@ -20,6 +20,7 @@ import (
 	"github.com/13rac1/teep/internal/e2ee"
 	"github.com/13rac1/teep/internal/provider"
 	"github.com/13rac1/teep/internal/provider/aci"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/provider/phalacloud"
 	"github.com/13rac1/teep/internal/provider/tinfoil"
 	"github.com/13rac1/teep/internal/tlsct"
@@ -50,6 +51,9 @@ type Options struct {
 	nearRoute   *capture.NearRoute
 	replayRoute provider.ResolvedRoute
 	replay      bool
+	// candidate marks the evidence-only verification of one NearDirect
+	// backend during discovered selection.
+	candidate bool
 }
 
 // CfgLoader loads config and provider for the named provider.
@@ -113,6 +117,30 @@ func Run(ctx context.Context, opts *Options) (report *attestation.VerificationRe
 	return result.report, retErr
 }
 
+// candidateAdmission verifies a discovered NearDirect backend as serve does:
+// the same report and blocking rule, without the E2EE probe, which runs only
+// on the admitted backend, and without capture.
+func candidateAdmission(opts *Options) neardirect.Admission {
+	return func(ctx context.Context, model string, route provider.ResolvedRoute) (bool, error) {
+		c := *opts
+		c.candidate, c.capture, c.Nonce = true, nil, attestation.NewNonce()
+		c.nearRoute = &capture.NearRoute{Authority: route.Authority(), Mode: "discovered"}
+		if opts.capture != nil {
+			client := *opts.Client
+			client.Transport = opts.capture.attestation
+			c.Client = &client
+		}
+		out, err := runEvidence(ctx, &c, &route)
+		if err != nil {
+			return false, err
+		}
+		for _, f := range out.report.BlockedFactors() {
+			slog.WarnContext(ctx, "neardirect backend blocked", "authority", route.Authority(), "factor", f.Name, "detail", f.Detail)
+		}
+		return out.report.Blocked(), nil
+	}
+}
+
 type verificationOutcome struct {
 	modelKey     e2ee.NearModelKey
 	report       *attestation.VerificationReport
@@ -154,6 +182,9 @@ func runEvidence(ctx context.Context, opts *Options, route *provider.ResolvedRou
 		setter.SetMetadataClient(opts.MetadataClient)
 	}
 
+	if admitter, ok := attester.(interface{ SetAdmission(neardirect.Admission) }); ok && route.Authority() == "" {
+		admitter.SetAdmission(candidateAdmission(opts))
+	}
 	if providerUsesTLSBinding(opts.ProviderName) {
 		attester, err = standaloneAttesterForRoute(ctx, opts, attester, route)
 		if err != nil {
@@ -742,6 +773,9 @@ func configureAttestationClient(attester provider.Attester, opts *Options, clien
 func evidenceE2EEOutcome(ctx context.Context, opts *Options, raw *attestation.RawAttestation) *attestation.E2EETestResult {
 	if opts.CapturedE2EE != nil {
 		return opts.CapturedE2EE
+	}
+	if opts.candidate {
+		return nil
 	}
 	if !nearTLSOnly(opts) && (!providerUsesTLSBinding(opts.ProviderName) || opts.Offline || opts.Provider.APIKey == "") {
 		if opts.capture != nil {
