@@ -285,8 +285,8 @@ func ComposeManagerDeployments(actions []ComposeManagerAction) (deps []ComposeDe
 var acceptedComposeFiles sync.Map
 
 // checkComposeSources applies the rule to every deployment, stopping at the
-// first that fails: the commit is on the default branch of ComposeFilesRepo,
-// the file at that commit hashes to file_sha256, and every service in it runs
+// first that fails: the file at that commit of ComposeFilesRepo is published
+// and hashes to file_sha256, and every service in it runs
 // an image pinned by digest (checkComposeImages). Offline, or with GitHub
 // unreachable, a deployment not already accepted fails.
 func checkComposeSources(ctx context.Context, client *http.Client, deps []ComposeDeployment, offline bool) error {
@@ -306,10 +306,8 @@ func checkComposeSources(ctx context.Context, client *http.Client, deps []Compos
 	return nil
 }
 
+// A public commit pinned by hash identifies what ran, whatever branch holds it.
 func checkComposeSource(ctx context.Context, client *http.Client, d ComposeDeployment) error {
-	if err := githubCommitOnDefaultBranch(ctx, client, ComposeFilesRepo, d.Commit); err != nil {
-		return err
-	}
 	url := fmt.Sprintf("%s/%s/%s/%s", RawGitHubURL, ComposeFilesRepo, d.Commit, d.File)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {

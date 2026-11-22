@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -149,7 +150,7 @@ func editActions(t *testing.T, cm []byte, edit func(map[string]any)) []byte {
 }
 
 // TestComposeManagerCapturedInstances applies the rule to both instances of
-// the captured response. Instance fccd496a deployed only files from main that
+// the captured response. Instance fccd496a deployed only published files that
 // pin every image; instance 7bb9af0a still reports a GLM deployment of
 // 5 Sep whose file builds its server image in the CVM.
 func TestComposeManagerCapturedInstances(t *testing.T) {
@@ -161,7 +162,7 @@ func TestComposeManagerCapturedInstances(t *testing.T) {
 			wantStatus(t, factors, FactorCMQuote, Pass, "REPORTDATA = sha256(")
 			wantStatus(t, factors, FactorCMTCB, Skip, "offline")
 			if strings.HasPrefix(inst.InstanceID, "fccd496a") {
-				wantStatus(t, factors, FactorCMActions, Pass, "7 compose files, each on the default branch of nearai/cvm-compose-files")
+				wantStatus(t, factors, FactorCMActions, Pass, "7 compose files, each published at its commit of nearai/cvm-compose-files")
 			} else {
 				wantStatus(t, factors, FactorCMActions, Fail, "prod/GLM-5.3-Flash-SGL-TP4.yaml at 3e3fa7cb0a55")
 				wantStatus(t, factors, FactorCMActions, Fail, "uses build")
@@ -236,9 +237,9 @@ func TestComposeManagerRuleRefusals(t *testing.T) {
 		edit func(*composeFilesFixture)
 		want string
 	}{
-		{"commit off main", func(fx *composeFilesFixture) {
-			fx.Main = slices.DeleteFunc(fx.Main, func(c string) bool { return c == commit })
-		}, "is not on the default branch"},
+		{"unknown commit", func(fx *composeFilesFixture) {
+			maps.DeleteFunc(fx.Files, func(k, _ string) bool { return strings.HasPrefix(k, commit+"/") })
+		}, "HTTP 404"},
 		{"file not published", func(fx *composeFilesFixture) { delete(fx.Files, file) }, "HTTP 404"},
 		{"foreign image", func(fx *composeFilesFixture) {
 			fx.Files[file] = strings.Replace(fx.Files[file], proxy, "attacker/proxy@sha256:"+strings.Repeat("0", 64), 1)
@@ -263,11 +264,20 @@ func TestComposeManagerRuleRefusals(t *testing.T) {
 	})
 	t.Run("github unreachable", func(t *testing.T) {
 		client := serveComposeFiles(t, nil)
-		GitHubAPIURL = "https://127.0.0.1:1"
+		RawGitHubURL = "https://127.0.0.1:1"
 		quote, cm, nonce := passingInstance(t)
 		_, factors := cmReport(t, client, quote, cm, nonce)
-		wantStatus(t, factors, FactorCMActions, Fail, "GitHub compare")
+		wantStatus(t, factors, FactorCMActions, Fail, "127.0.0.1:1")
 	})
+}
+
+// TestComposeManagerCommitOffMain accepts files at commits on no branch of
+// the repository: the compare API answers diverged for every commit.
+func TestComposeManagerCommitOffMain(t *testing.T) {
+	client := serveComposeFiles(t, func(fx *composeFilesFixture) { fx.Main = nil })
+	quote, cm, nonce := passingInstance(t)
+	_, factors := cmReport(t, client, quote, cm, nonce)
+	wantStatus(t, factors, FactorCMActions, Pass, "7 compose files")
 }
 
 func TestComposeManagerComposeImages(t *testing.T) {
