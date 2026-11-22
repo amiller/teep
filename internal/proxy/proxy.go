@@ -1088,6 +1088,10 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 		return g
 	})
 	gatewayTDXResult, gatewayComposeResult, gatewayPoCResult := gw.TDX, gw.Compose, gw.PoC
+	var gatewaySource *attestation.GatewaySourceResult
+	if gatewayComposeResult != nil && gatewayComposeResult.Err == nil {
+		gatewaySource = attestation.CheckGatewaySource(ctx, s.attestClient, raw.GatewayAppCompose, prov.GatewayMeasurementPolicy, s.cfg.Offline)
+	}
 	nvidiaResult, nvidiaDur := verifyNVIDIA(ctx, raw, nonce, prov.Name)
 	nrasResult, nrasDur := s.verifyNVIDIAOnline(ctx, raw, nonce, prov.Name)
 	pocResult, pocDur := s.verifyPoC(ctx, raw, prov.Name)
@@ -1127,6 +1131,7 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 		GatewaySEV:             gatewaySEVResult,
 		GatewayTDX:             gatewayTDXResult,
 		GatewayCompose:         gatewayComposeResult,
+		GatewaySource:          gatewaySource,
 		GatewayPoC:             gatewayPoCResult,
 		GatewayNonceHex:        raw.GatewayNonceHex,
 		GatewayNonce:           nonce,
