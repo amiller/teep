@@ -33,8 +33,6 @@ import (
 const (
 	// attestationPath is the NEAR AI API path for TEE attestation reports.
 	attestationPath = "/v1/attestation/report"
-
-	maxComposeManagerActions = 10_000
 )
 
 // Attester fetches attestation data from NEAR AI's /v1/attestation/report
@@ -193,6 +191,21 @@ func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.Res
 		return provider.ResolvedRoute{}, errors.New("missing NEAR route resolver")
 	}
 	return a.resolver.ResolveConfigured(ctx, model, configured)
+}
+
+// SetAdmission makes discovered selection verify candidate backends and skip
+// those that fail policy. Configure it before concurrent use.
+func (a *Attester) SetAdmission(admit Admission) {
+	if setter, ok := a.resolver.(interface{ SetAdmission(Admission) }); ok {
+		setter.SetAdmission(admit)
+	}
+}
+
+// RejectRoute drops an established discovered selection that now fails policy.
+func (a *Attester) RejectRoute(model, authority string) {
+	if rejecter, ok := a.resolver.(interface{ Reject(string, string) }); ok {
+		rejecter.Reject(model, authority)
+	}
 }
 
 // DomainResolver maps a model name to a backend authority.

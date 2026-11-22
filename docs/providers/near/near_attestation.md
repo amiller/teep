@@ -101,8 +101,9 @@ remains required.
 
 The gateway has its own signing-address scheme and TLS identity. Its evidence
 is validated separately, not compared with a repeated model report. Auxiliary
-OHTTP and compose-manager objects have their own typed schemas; their presence
-does not authorize inference or replace the model and gateway checks.
+OHTTP objects have their own typed schemas; their presence does not authorize
+inference or replace the model and gateway checks. The compose-manager object
+is verified by its own factors, described next.
 
 Exact-name and null-field handling use the shared
 [strict object decoder](../../../internal/jsonstrict/object.go). It re-encodes
@@ -123,6 +124,56 @@ files, `TestNearSignedModelKeySubstitution`, and the provider signed-evidence
 fixture suites. Transport requirements remain in the
 [shared transport reference](../../transport/README.md).
 
+## Compose-manager attestation
+
+The compose that the model CVM's MRConfigID binds runs compose-manager, its
+launcher, certbot and an OpenTelemetry collector. compose-manager then starts
+the inference proxy (which holds the model key and decrypts E2EE) and the
+model server from files of `nearai/cvm-compose-files`, after boot, so neither
+is in RTMR3 or MRConfigID. Their only record is the
+`compose_manager_attestation` member of each model entry: compose-manager's
+action log and a second TDX quote from the same TD, whose REPORTDATA is
+`sha256(canonical actions) ‖ client nonce` (`canonicalize_actions` and
+`attestation_binding` in nearai/compose-manager `src/main.rs`).
+
+- `compose_manager_quote` verifies that quote (Intel chain, signature, debug
+  off), requires MRTD, MRSEAM, MRCONFIGID, MROWNER, MROWNERCONFIG and RTMR0-3
+  to equal the instance quote, and recomputes REPORTDATA from the served
+  action list (JSON, keys sorted, no whitespace) and teep's nonce. RTMR3
+  carries the instance-id event, so the quote of another instance of the
+  same model fails.
+- `compose_manager_tcb` checks its Intel PCS collateral; TCB must be UpToDate.
+- `compose_manager_actions` reads the bound log and applies a rule to what it
+  runs. Each `compose_up` or `compose_stage` names a file at a commit: the
+  file at that commit of `nearai/cvm-compose-files`
+  (raw.githubusercontent.com), on any branch, must hash to the logged `file_sha256`,
+  and every service in it must run an image pinned by digest, with no
+  `build`, `extends`, `include` or interpolation in `image`. Each
+  `compose_manager_started` image must be `nearaidev/compose-manager` pinned
+  by digest; the measured launcher only swaps to images signed by
+  nearai/compose-manager workflows. `compose_down`, `docker_restart`,
+  `docker_clean`, `docker_evict`, `launcher_restart`, `dstack_agent_*`,
+  `kernel_algif_blacklist_*` and `env_override_set`/`unset` start nothing;
+  any other action fails.
+
+All three are enforced. The rule has no list to maintain: a NEAR release at
+any public commit that pins its images passes as soon as it is deployed. An
+accepted file is not fetched again in the same process; offline, or with GitHub
+unreachable, a file not yet accepted fails. The check covers every deployment
+the log reports, not only the one running: compose-manager runs every file
+under one Compose project by default, the log does not record the project,
+and anything it started in the TD had Docker access. Limits:
+
+- The log is compose-manager's own claim. It is as good as the
+  compose-manager images, which have `docker.sock`, `dstack.sock` and
+  `pid: host`.
+- compose-manager prunes entries older than seven days unless they anchor a
+  deployed record, so a log does not show everything the TD ever ran.
+- Env values are not logged: neither a `compose_up` request's `env` nor
+  `/admin/env` overrides (only their key names). They cannot change an image,
+  but they reach `environment` and other interpolated fields.
+- A file that builds its image in the CVM fails, even from main, because no
+  digest names what runs.
 ## Supply chain: image index and platform manifest
 
 The lookup mismatch was reported on 2026-11-11 for NEAR's
@@ -292,9 +343,18 @@ and the [dstack boot-measurement gap](../../attestation_gaps/dstack_integrity.md
 Each provider instance establishes one route per model. For the default NEAR
 origins, it reads `/endpoints`, validates `/backends/count` for the canonical
 model authority, and selects a random unsigned 64-bit index below the healthy
-count. The resulting `model-iN.completions.near.ai` authority remains fixed for
-the resolver's lifetime. An index identifies a routing name, not a permanent
-physical machine. NEAR can map that name to another backend when its fleet changes.
+count. An index identifies a routing name, not a permanent physical machine.
+NEAR can map that name to another backend when its fleet changes.
+
+In the proxy, selection verifies the backend before it publishes the route.
+If the backend's report is blocked by an enforced factor, or the route failed
+recently, selection tries the next index, wrapping below the healthy count, up
+to the healthy count or 16 indices. It logs the tried indices and fails closed
+with `route_policy` if none pass. A verification that does not complete (a
+transport or fetch error) ends selection without trying another index. When an
+established discovered route later returns a blocked report, the proxy drops
+that selection and the next request selects again. Explicit and static origins
+are never reselected. `teep verify` selects one random index without admission.
 
 | Configured HTTPS origin | Initial metadata | Route |
 | --- | --- | --- |
@@ -310,9 +370,10 @@ the current healthy count. Model identifiers must contain 1–256 bytes and no
 C0 or DEL control characters. Metadata cannot authenticate the selected backend:
 full evidence verification and the attested TLS handshake remain required.
 
-Endpoint and count snapshots last five minutes and serve only initial route
+Endpoint and count snapshots last five minutes and serve only route
 selection. Established routes never refresh discovery, including after
-metadata expiry, an outage, authorization eviction, or failed TLS authentication.
+metadata expiry, an outage, authorization eviction, or failed TLS authentication;
+only a blocked report in the proxy drops them.
 Each new full NearDirect verification owns a fresh attestation connection pool
 and closes it after the fetch. If an index now reaches another TLS identity,
 the failed handshake sends no inference bytes; the next request verifies the

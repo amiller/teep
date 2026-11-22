@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/capture"
 	"github.com/13rac1/teep/internal/config"
 	"github.com/13rac1/teep/internal/verify"
@@ -60,6 +61,9 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 
 	cfg, cp := buildVerifyRunConfig(env.manifest.Provider, env.manifest.NearConfig.Origin)
 	cp.E2EE = env.manifest.NearConfig.E2EE
+	// The fixture holds no GitHub responses, so compose_manager_actions fails.
+	cfg.ProviderAllowFail = map[string][]string{env.manifest.Provider: append(
+		config.MergedAllowFail(env.manifest.Provider, attestation.FormatDstack, cfg, false), attestation.FactorCMActions)}
 	report, _, err := verify.Replay(context.Background(), findFixtureDir(t, "neardirect_near"), func(string) (*config.Config, *config.Provider, error) { return cfg, cp, nil })
 
 	if err != nil {
@@ -69,6 +73,7 @@ func TestVerifyRun_NearDirect_Fixture(t *testing.T) {
 	assertNoEnforcedFailures(t, report)
 
 	assertMustPass(t, report, []string{"nonce_match", "tee_quote_present"})
+	assertComposeManager(t, report)
 
 	if report.Passed < 5 {
 		t.Errorf("expected at least 5 passing factors, got %d", report.Passed)

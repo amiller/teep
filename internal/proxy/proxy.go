@@ -571,6 +571,9 @@ func New(cfg *config.Config) (*Server, error) {
 				})
 			setter.SetMetadataClient(metadataFactory.NewClient())
 		}
+		if admitter, ok := p.Attester.(interface{ SetAdmission(neardirect.Admission) }); ok {
+			admitter.SetAdmission(s.admitRoute(p))
+		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
 	}
@@ -1140,6 +1143,7 @@ func (s *Server) verifyAttestation(ctx context.Context, prov *provider.Provider,
 		NvidiaNRAS:             nrasResult,
 		PoC:                    pocResult,
 		Compose:                sc.Compose,
+		ComposeManager:         attestation.VerifyComposeManager(ctx, raw, tdxResult, nonce, s.verifyQuote, s.attestClient, s.cfg.Offline),
 		Sigstore:               sc.Sigstore,
 		Rekor:                  sc.Rekor,
 		TinfoilSC:              tinfoilSC,
