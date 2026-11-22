@@ -117,6 +117,7 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 
 	// Build report with provider defaults.
 	modelPolicy, _ := defaults.MeasurementDefaults("neardirect")
+	composeManager := verifyComposeManager(t, &env, raw, tdxResult)
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "neardirect",
 		Model:             env.manifest.Model,
@@ -127,20 +128,23 @@ func TestIntegration_NearDirect_Fixture(t *testing.T) {
 		NvidiaNRAS:        nrasResult,
 		PoC:               pocResult,
 		Compose:           composeResult,
+		ComposeManager:    composeManager,
 		ImageRepos:        modelCD.Repos,
 		DigestToRepo:      digestToRepo,
 		Sigstore:          sigstoreResults,
 		Rekor:             rekorResults,
 		Policy:            modelPolicy,
 		SupplyChainPolicy: neardirect.SupplyChainPolicy(),
-		AllowFail:         serveAllowFail("neardirect", attestation.FormatDstack),
-		E2EETest:          fixtureE2EEResult(env.manifest.E2EE),
-		Inapplicable:      attestation.DefaultInapplicableFactors(),
+		// The fixture holds no GitHub responses, so compose_manager_actions fails.
+		AllowFail:    append(serveAllowFail("neardirect", attestation.FormatDstack), attestation.FactorCMActions),
+		E2EETest:     fixtureE2EEResult(env.manifest.E2EE),
+		Inapplicable: attestation.DefaultInapplicableFactors(),
 	})
 
 	logReportFactors(t, report)
 
 	assertNeardirectReport(t, report)
+	assertComposeManager(t, report)
 }
 
 func assertNeardirectReport(t *testing.T, report *attestation.VerificationReport) {

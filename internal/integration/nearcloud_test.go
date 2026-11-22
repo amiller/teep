@@ -133,6 +133,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 
 	// --- Build report with provider defaults ---
 	modelPolicy, gatewayPolicy := defaults.MeasurementDefaults("nearcloud")
+	composeManager := verifyComposeManager(t, &env, raw, tdxResult)
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:          "nearcloud",
 		Model:             env.manifest.Model,
@@ -143,6 +144,7 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 		NvidiaNRAS:        nrasResult,
 		PoC:               pocResult,
 		Compose:           composeResult,
+		ComposeManager:    composeManager,
 		ImageRepos:        modelCD.Repos,
 		GatewayImageRepos: gatewayCD.Repos,
 		DigestToRepo:      digestToRepo,
@@ -157,14 +159,16 @@ func TestIntegration_NearCloud_Fixture(t *testing.T) {
 		Policy:            modelPolicy,
 		GatewayPolicy:     gatewayPolicy,
 		SupplyChainPolicy: nearcloud.SupplyChainPolicy(),
-		AllowFail:         serveAllowFail("nearcloud", attestation.FormatGateway),
-		E2EETest:          fixtureE2EEResult(env.manifest.E2EE),
-		Inapplicable:      attestation.DefaultInapplicableFactors(),
+		// The fixture holds no GitHub responses, so compose_manager_actions fails.
+		AllowFail:    append(serveAllowFail("nearcloud", attestation.FormatGateway), attestation.FactorCMActions),
+		E2EETest:     fixtureE2EEResult(env.manifest.E2EE),
+		Inapplicable: attestation.DefaultInapplicableFactors(),
 	})
 
 	logReportFactors(t, report)
 
 	assertNearcloudReport(t, report)
+	assertComposeManager(t, report)
 }
 
 func assertNearcloudReport(t *testing.T, report *attestation.VerificationReport) {
