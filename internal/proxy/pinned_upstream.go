@@ -63,19 +63,15 @@ func (s *Server) pinnedClientForIdentity(providerName string, identity tlsct.Tra
 		s.pinnedUpstreams.mu.Unlock()
 		return nil, err
 	}
+	entry := &pinnedUpstreamEntry{identity: identity, client: client, transport: base, lastUsed: time.Now()}
 	client.Transport = tlsct.WrapCounting(
-		tlsct.WrapLogging(client.Transport),
+		tlsct.WrapLogging(tlsct.WrapAbandon(client.Transport, func() { s.pinnedUpstreams.retire(key, entry) })),
 		func() { s.stats.httpRequests.Add(1) },
 		func() { s.stats.httpErrors.Add(1) },
 	)
 
 	old := s.pinnedUpstreams.entries[key]
-	s.pinnedUpstreams.entries[key] = &pinnedUpstreamEntry{
-		identity:  identity,
-		client:    client,
-		transport: base,
-		lastUsed:  time.Now(),
-	}
+	s.pinnedUpstreams.entries[key] = entry
 	evicted := s.pinnedUpstreams.evictOldestLocked(key)
 	s.pinnedUpstreams.mu.Unlock()
 
@@ -86,6 +82,19 @@ func (s *Server) pinnedClientForIdentity(providerName string, identity tlsct.Tra
 		evicted.transport.CloseIdleConnections()
 	}
 	return client, nil
+}
+
+// retire removes entry so that the next request for key dials a new pool:
+// after an abandoned request, its connection may be wedged. Streams in flight
+// on entry finish. Its idle connections close now, the rest at IdleConnTimeout
+// or the HTTP/2 health check.
+func (p *pinnedUpstreamPools) retire(key pinnedUpstreamKey, entry *pinnedUpstreamEntry) {
+	p.mu.Lock()
+	if p.entries[key] == entry {
+		delete(p.entries, key)
+	}
+	p.mu.Unlock()
+	entry.transport.CloseIdleConnections()
 }
 
 func (p *pinnedUpstreamPools) evictOldestLocked(exclude pinnedUpstreamKey) *pinnedUpstreamEntry {
