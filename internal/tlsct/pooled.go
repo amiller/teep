@@ -162,6 +162,10 @@ func pooledTransport(handshakeTimeout time.Duration) *http.Transport {
 		MaxConnsPerHost:     MaxConnectionsPerHost,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
+		// A connection that receives no frame for SendPingTimeout gets a PING,
+		// and one that does not answer within PingTimeout closes, so no request
+		// waits on a wedged HTTP/2 connection (souk-co/souk#1146).
+		HTTP2: &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second},
 	}
 }
 
