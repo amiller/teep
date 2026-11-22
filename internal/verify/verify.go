@@ -327,6 +327,7 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 		NvidiaNRAS:             nrasResult,
 		PoC:                    pocResult,
 		Compose:                composeResult,
+		ComposeManager:         attestation.VerifyComposeManager(ctx, raw, tdxResult, ev.nonce, ev.tdx, ev.client, ev.opts.Offline),
 		ImageRepos:             modelCD.Repos,
 		GatewayImageRepos:      gatewayCD.Repos,
 		DigestToRepo:           digestToRepo,
