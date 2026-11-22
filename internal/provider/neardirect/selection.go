@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -18,6 +20,15 @@ type Selection struct {
 	Authority string
 	Mode      string
 }
+
+// Admission verifies the evidence of a candidate route before selection
+// publishes it. rejected reports that the evidence fails policy; err reports
+// that verification did not complete, which ends selection without trying
+// another backend.
+type Admission func(ctx context.Context, model string, route provider.ResolvedRoute) (rejected bool, err error)
+
+// SetAdmission configures candidate verification before concurrent use.
+func (r *EndpointResolver) SetAdmission(admit Admission) { r.admit = admit }
 
 type selectionOperation struct {
 	done      chan struct{}
@@ -91,6 +102,9 @@ func (r *EndpointResolver) selectionForModel(ctx context.Context, model string, 
 	}
 	r.mu.Unlock()
 	deadline := time.Now().Add(selectionTimeout)
+	if r.admit != nil {
+		deadline = deadline.Add(maxAdmissionTries * admissionTimeout)
+	}
 	mapping, err := r.mappingForModel(ctx, model)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,7 +136,7 @@ func (r *EndpointResolver) selectionForModel(ctx context.Context, model string, 
 func (r *EndpointResolver) selectRoute(ctx context.Context, cancel context.CancelFunc, model string, configured nearroute.Origin, mapping mappingSnapshot, op *selectionOperation) {
 	defer r.workers.Done()
 	defer cancel()
-	selected, countTime, err := r.initialSelection(ctx, mapping, configured)
+	selected, countTime, err := r.initialSelection(ctx, model, mapping, configured)
 	var route provider.ResolvedRoute
 	if err == nil {
 		route, err = provider.NewResolvedRoute("https://"+selected.Authority, "")
@@ -150,7 +164,7 @@ func (r *EndpointResolver) selectRoute(ctx context.Context, cancel context.Cance
 	close(op.done)
 }
 
-func (r *EndpointResolver) initialSelection(ctx context.Context, mapping mappingSnapshot, configured nearroute.Origin) (Selection, time.Time, error) {
+func (r *EndpointResolver) initialSelection(ctx context.Context, model string, mapping mappingSnapshot, configured nearroute.Origin) (Selection, time.Time, error) {
 	if configured.Indexed && configured.Authority == mapping.authority {
 		return Selection{}, time.Time{}, resolutionError(nearroute.Configuration, "ambiguous NEAR indexed authority", nil)
 	}
@@ -177,8 +191,67 @@ func (r *EndpointResolver) initialSelection(ctx context.Context, mapping mapping
 	if index >= count.healthy {
 		return Selection{}, time.Time{}, resolutionError(nearroute.Configuration, "backend selector returned an out-of-range index", nil)
 	}
-	authority, err := nearroute.IndexedAuthority(mapping.authority, index)
-	return Selection{Canonical: mapping.authority, Index: index, Authority: authority, Mode: "discovered"}, count.fetchedAt, err
+	if r.admit == nil {
+		authority, err := nearroute.IndexedAuthority(mapping.authority, index)
+		return Selection{Canonical: mapping.authority, Index: index, Authority: authority, Mode: "discovered"}, count.fetchedAt, err
+	}
+	selected, err := r.admitSelection(ctx, model, mapping.authority, index, count.healthy)
+	return selected, count.fetchedAt, err
+}
+
+// admitSelection verifies healthy indices from start onward, wrapping, and
+// returns the first whose evidence passes policy. Selection fails closed when
+// every tried index fails policy, and ends at the first incomplete
+// verification.
+func (r *EndpointResolver) admitSelection(ctx context.Context, model, canonical string, start, healthy uint64) (Selection, error) {
+	tries := min(healthy, maxAdmissionTries)
+	tried := make([]uint64, 0, tries)
+	for k := range tries {
+		index := (start + k) % healthy
+		authority, err := nearroute.IndexedAuthority(canonical, index)
+		if err != nil {
+			return Selection{}, err
+		}
+		route, err := provider.NewResolvedRoute("https://"+authority, "")
+		if err != nil {
+			return Selection{}, err
+		}
+		tried = append(tried, index)
+		attemptCtx, cancel := context.WithTimeout(ctx, admissionTimeout)
+		rejected, err := r.admit(attemptCtx, model, route)
+		cancel()
+		if err != nil {
+			slog.WarnContext(ctx, "neardirect backend verification incomplete", "model", model, "authority", authority, "tried_indices", tried, "err", err)
+			return Selection{}, err
+		}
+		if !rejected {
+			slog.InfoContext(ctx, "neardirect backend admitted", "model", model, "authority", authority, "tried_indices", tried, "healthy", healthy)
+			return Selection{Canonical: canonical, Index: index, Authority: authority, Mode: "discovered"}, nil
+		}
+		slog.WarnContext(ctx, "neardirect backend fails policy", "model", model, "authority", authority, "tried_indices", tried, "healthy", healthy)
+	}
+	return Selection{}, resolutionError(nearroute.Policy, fmt.Sprintf("no healthy backend passes policy: tried indices %v of %d", tried, healthy), nil)
+}
+
+// Reject drops the established discovered selection for model if it still
+// names authority, so the next resolution selects and admits again. A
+// pending, explicit, or since-replaced selection is unchanged.
+func (r *EndpointResolver) Reject(model, authority string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	op := r.selections[model]
+	if op == nil {
+		return
+	}
+	select {
+	case <-op.done:
+	default:
+		return
+	}
+	if op.err == nil && op.selection.Mode == "discovered" && op.selection.Authority == authority {
+		delete(r.selections, model)
+		slog.Warn("neardirect selection rejected; next request selects again", "model", model, "authority", authority)
+	}
 }
 
 // LookupSelection reads an established selection without fetching metadata or updating recency.

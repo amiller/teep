@@ -28,6 +28,8 @@ const (
 	refreshTimeout          = 30 * time.Second
 	selectionTimeout        = 60 * time.Second
 	maxCountFetches         = 16
+	maxAdmissionTries       = 16
+	admissionTimeout        = 60 * time.Second
 	metadataFailureDelay    = time.Second
 )
 
@@ -48,6 +50,7 @@ type EndpointResolver struct {
 	client           *http.Client
 	restrictToNearAI bool
 	selector         func(context.Context, uint64) (uint64, error)
+	admit            Admission
 	now              func() time.Time
 	mu               sync.Mutex
 	owner            context.Context //nolint:containedctx // Resolver lifecycle owns shared work.
