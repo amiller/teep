@@ -209,7 +209,7 @@ Is the software what it claims to be? These checks verify container provenance, 
 | 36 | `event_log_integrity` | Event log replayed against TDX RTMRs — proves log is authentic and complete |
 | 37 | `compose_manager_quote` | NEAR: the compose-manager quote is genuine, from the same TD as the instance quote, and its REPORTDATA binds sha256(action log) and the client nonce |
 | 38 | `compose_manager_tcb` | NEAR: the compose-manager quote TCB is UpToDate per Intel PCS |
-| 39 | `compose_manager_actions` | NEAR: every compose file the action log stages or brings up is on the default branch of nearai/cvm-compose-files with its published bytes and pins every image by digest, and every compose-manager it starts is nearaidev/compose-manager pinned by digest |
+| 39 | `compose_manager_actions` | NEAR: every compose file the action log stages or brings up is published at its commit of nearai/cvm-compose-files with its bytes and pins every image by digest, and every compose-manager it starts is nearaidev/compose-manager pinned by digest |
 
 </details>
 

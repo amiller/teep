@@ -4404,8 +4404,8 @@ func evalComposeManagerTCB(in *ReportInput) []FactorResult {
 }
 
 // evalComposeManagerActions checks what the bound action log runs: every
-// compose file it stages or brings up is at a commit on the default branch of
-// nearai/cvm-compose-files, hashes to the file published there, and pins
+// compose file it stages or brings up hashes to the file published at its
+// commit of nearai/cvm-compose-files, and pins
 // every service image by digest; every compose-manager it starts is
 // nearaidev/compose-manager pinned by digest.
 func evalComposeManagerActions(in *ReportInput) []FactorResult {
@@ -4420,6 +4420,6 @@ func evalComposeManagerActions(in *ReportInput) []FactorResult {
 		return factor(TierSupplyChain, FactorCMActions, Fail, r.SourceErr.Error())
 	}
 	return factor(TierSupplyChain, FactorCMActions, Pass, fmt.Sprintf(
-		"%d actions bound by the compose-manager quote; %d compose files, each on the default branch of %s with its published bytes and every image pinned by digest; running %s",
+		"%d actions bound by the compose-manager quote; %d compose files, each published at its commit of %s with its bytes and every image pinned by digest; running %s",
 		len(r.Actions), len(r.Deployments), ComposeFilesRepo, r.Images[len(r.Images)-1]))
 }

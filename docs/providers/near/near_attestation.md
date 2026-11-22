@@ -145,9 +145,8 @@ action log and a second TDX quote from the same TD, whose REPORTDATA is
 - `compose_manager_tcb` checks its Intel PCS collateral; TCB must be UpToDate.
 - `compose_manager_actions` reads the bound log and applies a rule to what it
   runs. Each `compose_up` or `compose_stage` names a file at a commit: the
-  commit must be on the default branch of `nearai/cvm-compose-files` (GitHub
-  compare `HEAD...<commit>` is `behind` or `identical`), the file at that
-  commit (raw.githubusercontent.com) must hash to the logged `file_sha256`,
+  file at that commit of `nearai/cvm-compose-files`
+  (raw.githubusercontent.com), on any branch, must hash to the logged `file_sha256`,
   and every service in it must run an image pinned by digest, with no
   `build`, `extends`, `include` or interpolation in `image`. Each
   `compose_manager_started` image must be `nearaidev/compose-manager` pinned
@@ -157,9 +156,9 @@ action log and a second TDX quote from the same TD, whose REPORTDATA is
   `kernel_algif_blacklist_*` and `env_override_set`/`unset` start nothing;
   any other action fails.
 
-All three are enforced. The rule has no list to maintain: a NEAR release from
-main that pins its images passes as soon as it is deployed. An accepted file
-is not fetched again in the same process; offline, or with GitHub
+All three are enforced. The rule has no list to maintain: a NEAR release at
+any public commit that pins its images passes as soon as it is deployed. An
+accepted file is not fetched again in the same process; offline, or with GitHub
 unreachable, a file not yet accepted fails. The check covers every deployment
 the log reports, not only the one running: compose-manager runs every file
 under one Compose project by default, the log does not record the project,
