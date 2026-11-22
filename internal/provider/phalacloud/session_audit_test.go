@@ -2,7 +2,9 @@ package phalacloud
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -24,7 +26,7 @@ func offlineAuditor(s *aci.Session) SessionAuditor {
 // replay.
 func TestSessionAuditPhalaModelCVM(t *testing.T) {
 	s := loadSession(t, "session_phala_direct.json", phalaDirectSessionID)
-	if err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
+	if _, err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -34,7 +36,7 @@ func TestSessionAuditPhalaModelCVM(t *testing.T) {
 // version 3.
 func TestSessionAuditPhalaModelCVMDstack063(t *testing.T) {
 	s := loadSession(t, "session_phala_direct_0_6_3.json", phalaDirect063SessionID)
-	if err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
+	if _, err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -91,7 +93,7 @@ func TestComposeBindingV3Refuses(t *testing.T) {
 // 1.4.x on TDX module 1.5.34), REPORTDATA, binding and GPU evidence.
 func TestSessionAuditChutes(t *testing.T) {
 	s := loadSession(t, "session_chutes.json", chutesSessionID)
-	if err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
+	if _, err := offlineAuditor(s).Audit(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -133,7 +135,7 @@ func TestSessionAuditRefuses(t *testing.T) {
 			if tc.change != nil {
 				tc.change(ev)
 			}
-			err = tc.auditor.auditEvidence(context.Background(), s, ev)
+			_, err = tc.auditor.auditEvidence(context.Background(), s, ev)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -173,5 +175,76 @@ func TestCheckSessionGPUResultRequiresVerifiedSignatures(t *testing.T) {
 	err := checkSessionGPUResult(&unverified, nonce)
 	if err == nil || !strings.Contains(err.Error(), "signatures were not verified") {
 		t.Fatalf("err = %v, want the unverified signatures refused", err)
+	}
+}
+
+// rtmrPolicy returns a policy that allows the given values of RTMR0-2; an
+// empty value leaves the register unset.
+func rtmrPolicy(values ...string) attestation.MeasurementPolicy {
+	var p attestation.MeasurementPolicy
+	for i, v := range values {
+		if v != "" {
+			p.RTMRAllow[i] = map[string]struct{}{v: {}}
+		}
+	}
+	return p
+}
+
+// With RTMR0-2 in the provider policy, the audit of the Phala model CVM
+// checks them, covers tee_hardware_config and tee_boot_config, and returns
+// the images of its compose. A value outside the policy refuses the
+// session; a register that the policy leaves unset is not checked.
+func TestSessionAuditRTMRPolicy(t *testing.T) {
+	s := loadSession(t, "session_phala_direct_0_6_3.json", phalaDirect063SessionID)
+	auditor := offlineAuditor(s)
+	ev, err := sessionEvidenceOf(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tdx := auditor.TDX(context.Background(), ev.raw.IntelQuote)
+	var rtmr [3]string
+	for i := range rtmr {
+		rtmr[i] = hex.EncodeToString(tdx.RTMRs[i][:])
+	}
+
+	auditor.Policy = rtmrPolicy(rtmr[:]...)
+	repos, err := auditor.Audit(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(repos, modelCVMImages) {
+		t.Errorf("images %v, want %v", repos, modelCVMImages)
+	}
+	covers := auditor.Covers(s)
+	if !slices.Contains(covers, attestation.FactorTEEHardwareConfig) || !slices.Contains(covers, attestation.FactorTEEBootConfig) {
+		t.Errorf("covers %v, want tee_hardware_config and tee_boot_config", covers)
+	}
+
+	for i := range rtmr {
+		wrong := rtmr
+		wrong[i] = strings.Repeat("00", 48)
+		auditor.Policy = rtmrPolicy(wrong[:]...)
+		if _, err := auditor.Audit(context.Background(), s); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("RTMR%d %s is not allowed", i, rtmr[i])) {
+			t.Errorf("RTMR%d outside the policy: err = %v", i, err)
+		}
+	}
+
+	auditor.Policy = rtmrPolicy("", rtmr[1])
+	covers = auditor.Covers(s)
+	if slices.Contains(covers, attestation.FactorTEEHardwareConfig) || !slices.Contains(covers, attestation.FactorTEEBootConfig) {
+		t.Errorf("RTMR1 only: covers %v, want tee_boot_config and not tee_hardware_config", covers)
+	}
+	auditor.Policy = rtmrPolicy("", strings.Repeat("00", 48), rtmr[2])
+	if _, err := auditor.Audit(context.Background(), s); err == nil || !strings.Contains(err.Error(), "RTMR1") {
+		t.Errorf("RTMR1 outside the policy with RTMR2 matched: err = %v", err)
+	}
+
+	auditor.Policy = attestation.MeasurementPolicy{}
+	if _, err := auditor.Audit(context.Background(), s); err != nil {
+		t.Fatalf("no RTMR policy: %v", err)
+	}
+	covers = auditor.Covers(s)
+	if slices.Contains(covers, attestation.FactorTEEHardwareConfig) || slices.Contains(covers, attestation.FactorTEEBootConfig) {
+		t.Errorf("no RTMR policy: covers %v", covers)
 	}
 }

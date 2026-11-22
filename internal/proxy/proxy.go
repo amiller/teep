@@ -1160,7 +1160,7 @@ func (s *Server) auditACISessions(ctx context.Context, prov *provider.Provider, 
 	if prov.Name != "phalacloud" || !raw.ACICanonicalReport {
 		return nil
 	}
-	return phalacloud.AuditSessions(ctx, phalacloud.SessionAuditor{TDX: s.verifyQuote, Offline: s.cfg.Offline}, raw)
+	return phalacloud.AuditSessions(ctx, phalacloud.SessionAuditor{TDX: s.verifyQuote, Policy: prov.MeasurementPolicy, Offline: s.cfg.Offline}, raw)
 }
 
 // verifyTDX runs TDX quote verification and REPORTDATA binding.

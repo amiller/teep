@@ -1013,6 +1013,10 @@ type ACISessionResult struct {
 	// every pinned session checked. With no direct quote in the response,
 	// BuildReport reports these factors from the audit (applyACISessionCoverage).
 	Covered []string
+	// ImageRepos lists the image repositories of the composes of the
+	// pinned sessions, set only when each pinned session has an attested
+	// compose. In ACI mode component_recognition reads them.
+	ImageRepos []string
 	// Err is set when the sessions could not be fetched or selected.
 	Err error
 	// UnknownFields holds the paths of the members of the session list,
@@ -2249,17 +2253,34 @@ func evalACISessionVerified(in *ReportInput) []FactorResult {
 // factor keeps its own result, so a check the audit does not make, and every
 // factor when no session was pinned, still fails.
 func applyACISessionCoverage(in *ReportInput, factors []FactorResult) {
-	s := in.ACISessions
-	if in.Raw == nil || !in.Raw.ACICanonicalReport || in.Raw.IntelQuote != "" || in.TDX != nil ||
-		s == nil || s.Err != nil || len(s.Pinned) == 0 {
+	if !aciSessionMode(in) {
 		return
 	}
+	s := in.ACISessions
 	for i := range factors {
 		if slices.Contains(s.Covered, factors[i].Name) {
 			factors[i].Status = Pass
 			factors[i].Detail = fmt.Sprintf("covered by aci_session_verified: the audit of each of the %d pinned sessions checked it", len(s.Pinned))
 		}
 	}
+}
+
+// aciSessionMode reports whether the report is in ACI mode: a canonical
+// ACI/1 report with no quote of the inference host, and at least one pinned
+// session.
+func aciSessionMode(in *ReportInput) bool {
+	s := in.ACISessions
+	return in.Raw != nil && in.Raw.ACICanonicalReport && in.Raw.IntelQuote == "" && in.TDX == nil &&
+		s != nil && s.Err == nil && len(s.Pinned) > 0
+}
+
+// modelImageRepos returns the image repositories of the model compose; in
+// ACI mode, those of the pinned sessions.
+func modelImageRepos(in *ReportInput) []string {
+	if aciSessionMode(in) {
+		return in.ACISessions.ImageRepos
+	}
+	return in.ImageRepos
 }
 
 // evalACIReceiptVerified states whether the receipt of the teep verify
@@ -2515,11 +2536,12 @@ func tinfoilBuildTransparencyResult(sc *TinfoilSupplyChainResult) FactorResult {
 func checkComponentRepoPolicy(in *ReportInput, scPolicy *SupplyChainPolicy) (FactorResult, bool) {
 	fail := FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Fail}
 
-	if len(in.ImageRepos) == 0 {
+	repos := modelImageRepos(in)
+	if len(repos) == 0 {
 		fail.Detail = "no attested model component repositories extracted from compose"
 		return fail, true
 	}
-	for _, repo := range in.ImageRepos {
+	for _, repo := range repos {
 		if !scPolicy.AllowedInModel(repo) {
 			fail.Detail = fmt.Sprintf("model component %q not recognized for provider/tier (%s)",
 				repo, strings.Join(scPolicy.ModelRepoNames(), ", "))
@@ -2807,7 +2829,7 @@ func evalComposeComponentRecognition(in *ReportInput) FactorResult {
 		return f
 	}
 	f := FactorResult{Tier: TierSupplyChain, Name: FactorComponentRecognition, Status: Pass}
-	f.Detail = fmt.Sprintf("%d model component(s) recognized", len(in.ImageRepos))
+	f.Detail = fmt.Sprintf("%d model component(s) recognized", len(modelImageRepos(in)))
 	if len(in.GatewayImageRepos) > 0 {
 		f.Detail += fmt.Sprintf("; %d gateway component(s) recognized", len(in.GatewayImageRepos))
 	}

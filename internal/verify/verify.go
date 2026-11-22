@@ -306,7 +306,7 @@ func (ev *evidenceVerifier) report(ctx context.Context, raw *attestation.RawAtte
 
 	scSEV := attestation.SupplyChainSEVResult(sevResult, gatewaySEVResult)
 	tinfoilSC := verifyTinfoilSupplyChain(ctx, raw, tdxResult, scSEV, ev.opts.ProviderName, ev.opts.ModelName, mergedPolicy, ev.opts.Offline, ev.client, ev.opts.VerificationTime)
-	aciSessions := auditACISessions(ctx, ev.opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: ev.tdx, Offline: ev.opts.Offline})
+	aciSessions := auditACISessions(ctx, ev.opts.ProviderName, raw, phalacloud.SessionAuditor{TDX: ev.tdx, Policy: mergedPolicy, Offline: ev.opts.Offline})
 
 	report := attestation.BuildReport(&attestation.ReportInput{
 		Provider:               ev.opts.ProviderName,

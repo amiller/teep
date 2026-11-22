@@ -20,7 +20,8 @@ import (
 //  1. the TDX quote: structure, Intel certificate chain, signature, debug
 //     off, and online a TCB that is UpToDate (not revoked);
 //  2. MRTD and MRSEAM: the Phala model CVM against the dstack base list,
-//     a Chutes instance against the Chutes list;
+//     a Chutes instance against the Chutes list; RTMR0-2 against the
+//     provider policy, for each register that it sets;
 //  3. REPORTDATA with the format's scheme and the session's own nonce;
 //  4. the channel binding and, for the Phala model CVM, the identity name
 //     the key and the address of the evidence (sessionEvidenceOf);
@@ -28,21 +29,26 @@ import (
 //  6. for the Phala model CVM, the event-log replay of the quote's RTMRs
 //     and the compose binding (MRConfigID version 1 or 3).
 //
-// teep has no policy for the RTMR values, the compose content or the
-// images of the Phala model CVM, and sends no Sigstore, Proof of Cloud or
-// NRAS request for a session.
+// teep has no policy for the compose content of the Phala model CVM; the
+// supply chain policy decides its images (component_recognition). The audit
+// sends no Sigstore, Proof of Cloud or NRAS request for a session.
 type SessionAuditor struct {
 	// TDX verifies a quote; online it fetches Intel PCS collateral.
 	TDX attestation.TDXVerifier
+	// Policy is the measurement policy of the provider; the audit reads
+	// only its RTMR0-2 allowlists.
+	Policy attestation.MeasurementPolicy
 	// Offline skips the TCB check, which needs Intel PCS collateral.
 	Offline bool
 }
 
-// Audit returns nil when every check passes for s, a full session record.
-func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) error {
+// Audit returns nil when every check passes for s, a full session record,
+// and the image repositories of the compose that the quote binds; a Chutes
+// session has no compose.
+func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) ([]string, error) {
 	ev, err := sessionEvidenceOf(ctx, s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, path := range ev.unknown {
 		s.Unknown = append(s.Unknown, "evidence."+path)
@@ -51,10 +57,10 @@ func (a SessionAuditor) Audit(ctx context.Context, s *aci.Session) error {
 }
 
 // Covers returns the report factors that Audit checks for s: the factors of
-// checks 1, 2, 3 and 5, the TCB factors only online, and those of check 6
-// only for the Phala model CVM. Every other factor that describes the
-// inference host, among them the RTMR policy, the client nonce and NRAS,
-// is not checked by the audit.
+// checks 1, 2, 3 and 5, the TCB factors only online, the RTMR factors only
+// for the registers that the policy sets, and those of check 6 only for the
+// Phala model CVM. Every other factor that describes the inference host,
+// among them the client nonce and NRAS, is not checked by the audit.
 func (a SessionAuditor) Covers(s *aci.Session) []string {
 	covered := []string{
 		attestation.FactorTEEQuotePresent, attestation.FactorTEEQuoteStructure,
@@ -67,30 +73,42 @@ func (a SessionAuditor) Covers(s *aci.Session) []string {
 		covered = append(covered, attestation.FactorIntelPCSCollateral,
 			attestation.FactorTEETCBCurrent, attestation.FactorTEETCBNotRevoked)
 	}
+	if a.Policy.HasRTMRPolicy(0) {
+		covered = append(covered, attestation.FactorTEEHardwareConfig)
+	}
+	if a.Policy.HasRTMRPolicy(1) || a.Policy.HasRTMRPolicy(2) {
+		covered = append(covered, attestation.FactorTEEBootConfig)
+	}
 	if s.VerifierID == verifierPhalaDirect {
 		covered = append(covered, attestation.FactorEventLogIntegrity, attestation.FactorComposeBinding)
 	}
 	return covered
 }
 
-func (a SessionAuditor) auditEvidence(ctx context.Context, s *aci.Session, ev *sessionEvidence) error {
+func (a SessionAuditor) auditEvidence(ctx context.Context, s *aci.Session, ev *sessionEvidence) ([]string, error) {
 	tdx := a.TDX(ctx, ev.raw.IntelQuote)
 	if err := a.checkQuote(tdx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := checkSessionMeasurements(tdx, sessionMeasurementPolicy(s)); err != nil {
-		return err
+		return nil, err
+	}
+	if err := checkSessionRTMRs(tdx, a.Policy); err != nil {
+		return nil, err
 	}
 	if _, err := ev.reportData.VerifyReportData(tdx.ReportData, ev.raw, ev.nonce); err != nil {
-		return fmt.Errorf("REPORTDATA: %w", err)
+		return nil, fmt.Errorf("REPORTDATA: %w", err)
 	}
 	if err := checkSessionGPU(ctx, ev); err != nil {
-		return err
+		return nil, err
 	}
-	if s.VerifierID == verifierPhalaDirect {
-		return checkModelCVMIntegrity(ev.raw, tdx)
+	if s.VerifierID != verifierPhalaDirect {
+		return nil, nil
 	}
-	return nil
+	if err := checkModelCVMIntegrity(ev.raw, tdx); err != nil {
+		return nil, err
+	}
+	return attestation.ExtractComposeDigests(ev.raw.AppCompose).Repos, nil
 }
 
 func (a SessionAuditor) checkQuote(tdx *attestation.TDXVerifyResult) error {
@@ -136,6 +154,20 @@ func checkSessionMeasurements(tdx *attestation.TDXVerifyResult, policy attestati
 	}
 	if _, ok := policy.MRSeamAllow[hex.EncodeToString(tdx.MRSeam)]; !ok {
 		return fmt.Errorf("MRSEAM %s is not allowed", hex.EncodeToString(tdx.MRSeam))
+	}
+	return nil
+}
+
+// checkSessionRTMRs requires RTMR0-2 of the quote to be in the policy's
+// allowlist of each register that the policy sets.
+func checkSessionRTMRs(tdx *attestation.TDXVerifyResult, policy attestation.MeasurementPolicy) error {
+	for i := range 3 {
+		if !policy.HasRTMRPolicy(i) {
+			continue
+		}
+		if _, ok := policy.RTMRAllow[i][hex.EncodeToString(tdx.RTMRs[i][:])]; !ok {
+			return fmt.Errorf("RTMR%d %s is not allowed", i, hex.EncodeToString(tdx.RTMRs[i][:]))
+		}
 	}
 	return nil
 }
