@@ -27,6 +27,8 @@ func routeErrorResponse(err error) (status int, classification string) {
 			return http.StatusServiceUnavailable, "metadata_expired"
 		case nearroute.Configuration:
 			return http.StatusBadGateway, "route_configuration_mismatch"
+		case nearroute.Policy:
+			return http.StatusBadGateway, "route_policy"
 		}
 	}
 	if errors.Is(err, tlsct.ErrConnectionCapacity) {

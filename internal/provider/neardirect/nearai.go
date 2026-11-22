@@ -193,6 +193,21 @@ func (a *Attester) ResolveRoute(ctx context.Context, model string) (provider.Res
 	return a.resolver.ResolveConfigured(ctx, model, configured)
 }
 
+// SetAdmission makes discovered selection verify candidate backends and skip
+// those that fail policy. Configure it before concurrent use.
+func (a *Attester) SetAdmission(admit Admission) {
+	if setter, ok := a.resolver.(interface{ SetAdmission(Admission) }); ok {
+		setter.SetAdmission(admit)
+	}
+}
+
+// RejectRoute drops an established discovered selection that now fails policy.
+func (a *Attester) RejectRoute(model, authority string) {
+	if rejecter, ok := a.resolver.(interface{ Reject(string, string) }); ok {
+		rejecter.Reject(model, authority)
+	}
+}
+
 // DomainResolver maps a model name to a backend authority.
 type DomainResolver interface {
 	ResolveConfigured(context.Context, string, nearroute.Origin) (provider.ResolvedRoute, error)

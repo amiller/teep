@@ -343,9 +343,18 @@ and the [dstack boot-measurement gap](../../attestation_gaps/dstack_integrity.md
 Each provider instance establishes one route per model. For the default NEAR
 origins, it reads `/endpoints`, validates `/backends/count` for the canonical
 model authority, and selects a random unsigned 64-bit index below the healthy
-count. The resulting `model-iN.completions.near.ai` authority remains fixed for
-the resolver's lifetime. An index identifies a routing name, not a permanent
-physical machine. NEAR can map that name to another backend when its fleet changes.
+count. An index identifies a routing name, not a permanent physical machine.
+NEAR can map that name to another backend when its fleet changes.
+
+In the proxy, selection verifies the backend before it publishes the route.
+If the backend's report is blocked by an enforced factor, or the route failed
+recently, selection tries the next index, wrapping below the healthy count, up
+to the healthy count or 16 indices. It logs the tried indices and fails closed
+with `route_policy` if none pass. A verification that does not complete (a
+transport or fetch error) ends selection without trying another index. When an
+established discovered route later returns a blocked report, the proxy drops
+that selection and the next request selects again. Explicit and static origins
+are never reselected. `teep verify` selects one random index without admission.
 
 | Configured HTTPS origin | Initial metadata | Route |
 | --- | --- | --- |
@@ -361,9 +370,10 @@ the current healthy count. Model identifiers must contain 1–256 bytes and no
 C0 or DEL control characters. Metadata cannot authenticate the selected backend:
 full evidence verification and the attested TLS handshake remain required.
 
-Endpoint and count snapshots last five minutes and serve only initial route
+Endpoint and count snapshots last five minutes and serve only route
 selection. Established routes never refresh discovery, including after
-metadata expiry, an outage, authorization eviction, or failed TLS authentication.
+metadata expiry, an outage, authorization eviction, or failed TLS authentication;
+only a blocked report in the proxy drops them.
 Each new full NearDirect verification owns a fresh attestation connection pool
 and closes it after the fetch. If an index now reaches another TLS identity,
 the failed handshake sends no inference bytes; the next request verifies the

@@ -8,6 +8,7 @@ import (
 
 	"github.com/13rac1/teep/internal/attestation"
 	"github.com/13rac1/teep/internal/provider"
+	"github.com/13rac1/teep/internal/provider/neardirect"
 	"github.com/13rac1/teep/internal/tlsct"
 )
 
@@ -116,8 +117,29 @@ func (s *Server) loadAuthorization(ctx context.Context, prov *provider.Provider,
 	})
 	if blocked != nil {
 		blocked.Model = key.Model()
+		if rejecter, ok := prov.Attester.(interface{ RejectRoute(string, string) }); ok {
+			rejecter.RejectRoute(key.Model(), key.Authority())
+		}
 	}
 	return value, blocked, loadErr
+}
+
+// admitRoute verifies a candidate NearDirect backend during selection. A
+// blocked report, or a route that recently failed, rejects the candidate; any
+// other failure ends selection. The authorization it stores serves the first
+// request on the admitted route.
+func (s *Server) admitRoute(prov *provider.Provider) neardirect.Admission {
+	return func(ctx context.Context, model string, route provider.ResolvedRoute) (bool, error) {
+		key, err := route.AuthorizationKey(prov.Name, model)
+		if err != nil {
+			return false, err
+		}
+		_, blocked, err := s.loadAuthorization(ctx, prov, route, key)
+		if httpErr, ok := errors.AsType[*httpError](err); ok && httpErr.status == "neg_cached" {
+			return true, nil
+		}
+		return blocked != nil, err
+	}
 }
 
 func (s *authorizationStore) snapshots() []*authorization {

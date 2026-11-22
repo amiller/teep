@@ -22,6 +22,7 @@ const (
 	Delay
 	Expired
 	Configuration
+	Policy
 )
 
 // Error preserves a non-secret classification and underlying cause.

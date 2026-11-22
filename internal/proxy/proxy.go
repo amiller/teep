@@ -571,6 +571,9 @@ func New(cfg *config.Config) (*Server, error) {
 				})
 			setter.SetMetadataClient(metadataFactory.NewClient())
 		}
+		if admitter, ok := p.Attester.(interface{ SetAdmission(neardirect.Admission) }); ok {
+			admitter.SetAdmission(s.admitRoute(p))
+		}
 		s.providers[name] = p
 		slog.Info("registered provider", "provider", name, "base_url", cp.BaseURL, "api_key", config.RedactKey(cp.APIKey), "e2ee", cp.E2EE)
 	}
